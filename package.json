@@ -1,0 +1,19 @@
+{
+  "name": "goldfish",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Cloudflare-native, project-first memory layer for AI agents.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260910.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.44.0"
+  }
+}

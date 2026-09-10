@@ -1,5 +1,6 @@
-*.json
-*.jsonl
+mem0_export_*.json
+memory-export-*.json
+.mem0-pending.jsonl
 .agent-context/
 .env*
 !.env.example
