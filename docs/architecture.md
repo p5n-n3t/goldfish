@@ -57,6 +57,13 @@ Use cases:
 
 MCP is not a replacement for canonical storage; it is the network protocol layer for coordination.
 
+Implementation contract:
+- serve one Streamable HTTP endpoint at `https://goldfish.ziopsyop.tech/mcp`; do not start a new server with the deprecated SSE transport
+- use OAuth 2.1 discovery and Dynamic Client Registration as the primary remote-client path, with `memory.read`, `memory.write`, and `memory.admin` scopes
+- use Cloudflare Access as the owner identity boundary and keep API keys as a scoped adapter for local clients that cannot complete OAuth
+- keep the first tool surface goal-oriented: `memory_search`, `memory_get`, `memory_save`, `memory_checkpoint`, and `memory_list_projects`
+- expose read tools first for ChatGPT Developer Mode; its individual plans currently have a narrower write-tool rollout than other MCP clients
+
 ### 3. D1 canonical records and metadata
 
 D1 is the source of truth for structured and operational memory.

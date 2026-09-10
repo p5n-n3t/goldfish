@@ -68,6 +68,7 @@ Outputs:
 Design notes:
 - R2 stores the raw artifact; D1 stores the canonical record metadata and reference pointer.
 - Duplicate or re-imported content should be detected by content hash and provenance boundary.
+- The current export set contains 204 candidate memories after collapsing one malformed duplicate pair. Preserve source file and row provenance, do not derive absolute dates from relative timestamps, retain superseded records as inactive, and send short or multi-claim records through review before publication.
 
 ## Phase 3: semantic retrieval and AI pipeline
 
