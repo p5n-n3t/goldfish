@@ -1,5 +1,7 @@
 import { contentHash, validateMemoryInput, validateSearchQuery } from "./domain";
 import { LexicalD1MemoryRepository, type D1DatabaseLike } from "./repositories";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 
 export interface Env {
   DB?: D1DatabaseLike;
@@ -8,6 +10,29 @@ export interface Env {
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
+
+function goldfishMcpServer(): McpServer {
+  const server = new McpServer({ name: "goldfish", version: "0.1.0" });
+  server.registerTool("memory_status", {
+    title: "Goldfish memory status",
+    description: "Reports the Goldfish service status and its current authentication requirement."
+  }, async () => ({
+    content: [{ type: "text", text: "Goldfish is online. Memory reads and writes require OAuth or a scoped API key." }]
+  }));
+  return server;
+}
+
+async function handleMcp(request: Request): Promise<Response> {
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableDnsRebindingProtection: true,
+    allowedHosts: ["goldfish.ziopsyop.tech", "goldfish-worker.joeyq.workers.dev"],
+    allowedOrigins: ["https://goldfish.ziopsyop.tech"]
+  });
+  const server = goldfishMcpServer();
+  await server.connect(transport);
+  return transport.handleRequest(request);
+}
 
 function authenticationConfigurationError(): Response {
   return json({ error: "AUTH_NOT_CONFIGURED", message: "Authentication is not configured for this Worker" }, 503);
@@ -32,6 +57,7 @@ export default {
     if (request.method === "GET" && url.pathname === "/health") {
       return json({ ok: true, service: "goldfish-worker" });
     }
+    if (url.pathname === "/mcp") return handleMcp(request);
 
     const memoryMatch = url.pathname.match(/^\/v1\/projects\/([^/]+)\/memory(?:\/(search))?$/);
     if (memoryMatch && (request.method === "POST")) {
