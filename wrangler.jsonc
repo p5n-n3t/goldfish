@@ -5,6 +5,13 @@
   "compatibility_date": "2026-09-10",
   "account_id": "0228e3fe174bbc185f30b1d4eaf5f166",
   "workers_dev": true,
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "d2a41763cfc04aef98c90a59924df107"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
