@@ -48,7 +48,7 @@ export default {
         const input = validateMemoryInput(body);
         const record = {
           id: crypto.randomUUID(), projectId, content: input.content, kind: input.kind,
-          contentHash: await contentHash(input.content), metadata: input.metadata,
+          contentHash: await contentHash(input.content), metadata: input.metadata ?? {},
           agentId: input.agentId, sessionId: input.sessionId
         };
         return json({ projectId, memory: await repository.ingest(projectId, record) }, 201);
