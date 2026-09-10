@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "goldfish-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-10",
+  "account_id": "0228e3fe174bbc185f30b1d4eaf5f166",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "goldfish",
+      "database_id": "d45dee13-e056-43dd-bc09-c3563d326cd0",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "goldfish-artifacts"
+    }
+  ],
+  "vectorize": [
+    {
+      "binding": "MEMORY_INDEX",
+      "index_name": "goldfish-memory-768"
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
