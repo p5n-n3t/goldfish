@@ -1,0 +1,9 @@
+*.json
+*.jsonl
+.agent-context/
+.env*
+!.env.example
+node_modules/
+.wrangler/
+dist/
+.remember/
