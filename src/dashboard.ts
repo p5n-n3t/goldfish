@@ -40,8 +40,8 @@ function dashboardCard(label: string, state: string, detail: string): string {
 }
 
 /**
- * Returns the public dashboard shell. It deliberately has no data access: every
- * operational value remains unavailable until authenticated analytics exists.
+ * Returns the dashboard shell. The Worker supplies aggregate D1 counts; this
+ * renderer never invents metrics when a binding is unavailable.
  */
 export function renderDashboard(metrics?: DashboardMetrics): string {
   const cards = metrics ? [
@@ -90,12 +90,12 @@ export function renderDashboard(metrics?: DashboardMetrics): string {
   <main>
     <div class="brand">Goldfish</div>
     <h1>Project memory, with an honest operational view.</h1>
-    <p class="lede">This management surface is available, but it does not infer account, project, or retrieval data from unauthenticated requests.</p>
+    <p class="lede">A small operational view of the Goldfish ledger. Aggregate counts are read from D1 on every page load; no memory content is exposed here.</p>
     ${notice}
     <section class="grid" aria-label="Service overview">${statusCards}</section>
     <section class="sections" aria-label="Operational detail">
-      <article class="panel"><h2>Imports</h2><p>Unavailable. Import history will appear only after an authorized import ledger is connected.</p></article>
-      <article class="panel"><h2>Retrieval analytics</h2><p>Unavailable. Recall quality, latency, and hit-rate data are not collected or estimated here.</p></article>
+      <article class="panel"><h2>Imports</h2><p>${metrics ? `${metrics.imports.toLocaleString()} import ledger entries are recorded in D1.` : "Import history is unavailable until the D1 binding is connected."}</p></article>
+      <article class="panel"><h2>Retrieval</h2><p>Goldfish currently uses project-scoped lexical search. Recall quality, latency, and hit-rate analytics will appear after request telemetry is added; no values are estimated.</p></article>
     </section>
     <footer>Goldfish dashboard · ${metrics ? "live D1 totals" : "no live metrics are displayed"}.</footer>
   </main>

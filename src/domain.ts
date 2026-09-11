@@ -28,7 +28,7 @@ export interface MemoryRecord {
 }
 
 export function validateMemoryInput(input: unknown): MemoryInput {
-  if (!input || typeof input !== "object") {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("memory input must be an object");
   }
   const value = input as Record<string, unknown>;
@@ -45,6 +45,10 @@ export function validateMemoryInput(input: unknown): MemoryInput {
   if (value.metadata !== undefined && (!value.metadata || typeof value.metadata !== "object" || Array.isArray(value.metadata))) {
     throw new Error("metadata must be an object");
   }
+  for (const field of ["agentId", "sessionId"]) {
+    if (value[field] !== undefined && (typeof value[field] !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(value[field] as string))) throw new Error(`${field} must be a valid ID`);
+  }
+  if (JSON.stringify(value.metadata ?? {}).length > 32_000) throw new Error("metadata exceeds 32000 characters");
   return {
     content: value.content,
     kind: value.kind as MemoryKind,
@@ -58,6 +62,7 @@ export function validateSearchQuery(input: unknown): MemorySearchQuery {
   if (!input || typeof input !== "object") throw new Error("search input must be an object");
   const value = input as Record<string, unknown>;
   if (typeof value.query !== "string" || value.query.trim().length === 0) throw new Error("query is required");
+  if (value.query.length > 2000) throw new Error("query exceeds 2000 characters");
   const limit = value.limit === undefined ? 20 : value.limit;
   if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100) {
     throw new Error("limit must be an integer between 1 and 100");

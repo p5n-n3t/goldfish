@@ -1,0 +1,20 @@
+{
+  "$comment": "TEMPLATE ONLY. Current VS Code/Copilot-compatible MCP shape. Use a workspace .mcp.json or user MCP configuration only after the Goldfish pilot passes.",
+  "inputs": [
+    {
+      "id": "goldfish-api-key",
+      "type": "promptString",
+      "description": "Goldfish scoped pilot key",
+      "password": true
+    }
+  ],
+  "servers": {
+    "goldfish": {
+      "type": "http",
+      "url": "https://goldfish.ziopsyop.tech/mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:goldfish-api-key}"
+      }
+    }
+  }
+}

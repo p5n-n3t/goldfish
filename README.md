@@ -1,6 +1,6 @@
 # Goldfish
 
-Goldfish is a Cloudflare-native project memory and recall system for multi-agent work. This repository is currently a design specification and migration blueprint, based on the investigation evidence in `.agent-context/checkpoint.md` and the local JSON export files under the repo root.
+Goldfish is a Cloudflare-native project memory and recall system for multi-agent work. The Worker, project-scoped bearer API, Streamable HTTP MCP endpoint, D1 ledger, migration normalizer, and dashboard are implemented in this repository.
 
 ## Evidence reviewed
 
@@ -37,6 +37,15 @@ Goldfish uses a Cloudflare-first architecture with these primary services:
 - Project-first design wins over a generic “one memory for everyone” model.
 - No pricing, deployment, benchmark claims, or ownership assumptions are included in this design.
 
-## Implementation intent
+## Current runtime
 
-The repository defines the target architecture and migration path for a production-ready memory layer that supports recall, provenance, and secure cross-agent collaboration inside a single Cloudflare-native stack.
+The deployed service is `https://goldfish.ziopsyop.tech`.
+
+- `GET /health` is a public liveness check.
+- `POST /v1/projects` and `/v1/projects/:id/keys` are protected bootstrap operations.
+- Memory REST routes and `POST /mcp` require a scoped `gf_live_...` bearer key.
+- MCP exposes `memory_search`, `memory_get`, `memory_save`, `memory_checkpoint`, and `memory_list_projects` alongside `memory_status`.
+- D1 is the canonical ledger; the current retrieval implementation is deterministic lexical search with provenance. Vectorize and Workers AI bindings are reserved for the next retrieval adapter.
+- OAuth discovery and a ChatGPT-style OAuth connector are future work. API-key clients can use the live endpoint now.
+
+See [`docs/runtime-api.md`](docs/runtime-api.md) for the request contract and [`integrations/README.md`](integrations/README.md) for client setup. Never commit a bearer key; use a client credential store or environment variable.

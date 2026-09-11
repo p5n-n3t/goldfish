@@ -1,0 +1,41 @@
+schema_version: 1
+status: api_key_pilot_ready
+endpoint:
+  mcp: https://goldfish.ziopsyop.tech/mcp
+  health: https://goldfish.ziopsyop.tech/health
+  rest:
+    save: https://goldfish.ziopsyop.tech/v1/projects/{projectId}/memory
+    search: https://goldfish.ziopsyop.tech/v1/projects/{projectId}/memory/search
+authentication:
+  preferred: scoped_bearer_api_key
+  future: oauth_2_1
+  scopes: [memory.read, memory.write]
+  secret_policy: Environment variables and client credential stores only; never repository files.
+required_tools:
+  - memory_search
+  - memory_get
+  - memory_save
+  - memory_checkpoint
+  - memory_list_projects
+current_deployment:
+  exposed_tools: [memory_status, memory_search, memory_get, memory_save, memory_checkpoint, memory_list_projects]
+  authenticated_memory_access: true
+  retrieval: lexical
+  cutover_allowed: true
+  oauth: future
+record_mapping:
+  projectId: exact project folder slug
+  agentId: stable adapter identity
+  sessionId: client session identifier
+  metadata.owner_id: jq
+  metadata.type: prompt_record | checkpoint | decision | architecture | user_preference | project_state | project_init
+  metadata.status: received | in_progress | completed | crashed | paused
+rest_save_body:
+  content: Required durable text
+  kind: fact | conversation | document | task
+  agentId: Stable client identity
+  sessionId: Client session identifier
+  metadata: Provenance and workflow fields
+rest_search_body:
+  query: Project-scoped noun phrase
+  limit: 10

@@ -1,0 +1,13 @@
+# TEMPLATE ONLY — do not add this to ~/.codex/config.toml until the Goldfish
+# live-API checklist has passed. It makes no changes by itself.
+#
+# Requires: Streamable HTTP MCP; OAuth discovery or GOLDFISH_API_KEY provisioned
+# for a least-privilege pilot identity; all required tools visible to the client.
+
+[mcp_servers.goldfish]
+url = "https://goldfish.ziopsyop.tech/mcp"
+bearer_token_env_var = "GOLDFISH_API_KEY"
+
+# Use `agentId=codex_cli` in workflow records. The Codex Desktop wrapper uses
+# `chatgpt_desktop`; it can use the same transport declaration only after its
+# managed configuration schema is verified for the installed build.

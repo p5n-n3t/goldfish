@@ -1,0 +1,12 @@
+{
+  "$comment": "TEMPLATE ONLY. Use a project-scoped .mcp.json pilot after Goldfish auth and required tools are live. Claude Code supports HTTP MCP servers and environment-variable expansion.",
+  "mcpServers": {
+    "goldfish": {
+      "type": "http",
+      "url": "https://goldfish.ziopsyop.tech/mcp",
+      "headers": {
+        "Authorization": "Bearer ${GOLDFISH_API_KEY}"
+      }
+    }
+  }
+}
