@@ -1,4 +1,5 @@
 import { contentHash, validateMemoryInput, validateSearchQuery } from "./domain";
+import { renderDashboard } from "./dashboard";
 import { LexicalD1MemoryRepository, type D1DatabaseLike } from "./repositories";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -56,6 +57,14 @@ export default {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") {
       return json({ ok: true, service: "goldfish-worker" });
+    }
+    if (request.method === "GET" && url.pathname === "/") {
+      return new Response(renderDashboard(), {
+        headers: {
+          "content-type": "text/html; charset=UTF-8",
+          "cache-control": "no-store"
+        }
+      });
     }
     if (url.pathname === "/mcp") return handleMcp(request);
 
