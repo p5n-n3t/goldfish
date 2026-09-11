@@ -1,4 +1,11 @@
-const cards = [
+export interface DashboardMetrics {
+  memoryRecords: number;
+  projects: number;
+  agents: number;
+  imports: number;
+}
+
+const unavailableCards = [
   {
     label: "Memory records",
     state: "Unavailable",
@@ -36,8 +43,17 @@ function dashboardCard(label: string, state: string, detail: string): string {
  * Returns the public dashboard shell. It deliberately has no data access: every
  * operational value remains unavailable until authenticated analytics exists.
  */
-export function renderDashboard(): string {
+export function renderDashboard(metrics?: DashboardMetrics): string {
+  const cards = metrics ? [
+    { label: "Memory records", state: metrics.memoryRecords.toLocaleString(), detail: "Live canonical-record total from D1." },
+    { label: "Projects", state: metrics.projects.toLocaleString(), detail: "Live project total from D1." },
+    { label: "Agents", state: metrics.agents.toLocaleString(), detail: "Live agent total from D1." },
+    { label: "Imports", state: metrics.imports.toLocaleString(), detail: "Live import-ledger total from D1." }
+  ] : unavailableCards;
   const statusCards = cards.map(({ label, state, detail }) => dashboardCard(label, state, detail)).join("");
+  const notice = metrics
+    ? "<aside class=\"notice\"><strong>Live data.</strong> Counts are read from the Goldfish D1 ledger and refresh on every page load.</aside>"
+    : "<aside class=\"notice\"><strong>Dashboard data is unavailable.</strong> Authentication and dashboard data sources have not been configured in this Worker baseline.</aside>";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -75,13 +91,13 @@ export function renderDashboard(): string {
     <div class="brand">Goldfish</div>
     <h1>Project memory, with an honest operational view.</h1>
     <p class="lede">This management surface is available, but it does not infer account, project, or retrieval data from unauthenticated requests.</p>
-    <aside class="notice"><strong>Dashboard data is unavailable.</strong> Authentication and dashboard data sources have not been configured in this Worker baseline.</aside>
+    ${notice}
     <section class="grid" aria-label="Service overview">${statusCards}</section>
     <section class="sections" aria-label="Operational detail">
       <article class="panel"><h2>Imports</h2><p>Unavailable. Import history will appear only after an authorized import ledger is connected.</p></article>
       <article class="panel"><h2>Retrieval analytics</h2><p>Unavailable. Recall quality, latency, and hit-rate data are not collected or estimated here.</p></article>
     </section>
-    <footer>Goldfish dashboard shell · no live metrics are displayed.</footer>
+    <footer>Goldfish dashboard · ${metrics ? "live D1 totals" : "no live metrics are displayed"}.</footer>
   </main>
 </body>
 </html>`;

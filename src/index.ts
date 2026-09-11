@@ -1,5 +1,5 @@
 import { contentHash, validateMemoryInput, validateSearchQuery } from "./domain";
-import { renderDashboard } from "./dashboard";
+import { renderDashboard, type DashboardMetrics } from "./dashboard";
 import { LexicalD1MemoryRepository, type D1DatabaseLike } from "./repositories";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -52,6 +52,17 @@ async function readJson(request: Request): Promise<unknown> {
   }
 }
 
+async function dashboardMetrics(db: D1DatabaseLike): Promise<DashboardMetrics> {
+  const count = async (table: "memory_records" | "projects" | "agents" | "imports"): Promise<number> => {
+    const result = await db.prepare(`SELECT COUNT(*) AS total FROM ${table}`).all<{ total: number }>();
+    return result.results[0]?.total ?? 0;
+  };
+  const [memoryRecords, projects, agents, imports] = await Promise.all([
+    count("memory_records"), count("projects"), count("agents"), count("imports")
+  ]);
+  return { memoryRecords, projects, agents, imports };
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -59,7 +70,8 @@ export default {
       return json({ ok: true, service: "goldfish-worker" });
     }
     if (request.method === "GET" && url.pathname === "/") {
-      return new Response(renderDashboard(), {
+      const metrics = env.DB ? await dashboardMetrics(env.DB).catch(() => undefined) : undefined;
+      return new Response(renderDashboard(metrics), {
         headers: {
           "content-type": "text/html; charset=UTF-8",
           "cache-control": "no-store"
