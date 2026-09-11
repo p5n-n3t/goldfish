@@ -5,6 +5,7 @@ import { authenticate, authorize, HttpError, issueKey, requireAdmin, revokeKey, 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
+import { executeGraphQL } from "./graphql";
 
 export interface Env {
   DB?: D1DatabaseLike;
@@ -86,10 +87,26 @@ async function readJson(request: Request): Promise<unknown> {
 async function dashboardMetrics(db: D1DatabaseLike): Promise<DashboardMetrics> {
   const count = async (table: "memory_records" | "projects" | "agents" | "imports"): Promise<number> => {
     const result = await db.prepare(`SELECT COUNT(*) AS total FROM ${table}`).all<{ total: number }>();
-    return result.results[0]?.total ?? 0;
+    return Number(result.results[0]?.total ?? 0);
   };
-  const [memoryRecords, projects, agents, imports] = await Promise.all([count("memory_records"), count("projects"), count("agents"), count("imports")]);
-  return { memoryRecords, projects, agents, imports };
+  const [memoryRecords, projects, agents, imports, byKind, activity, projectBreakdown, importBreakdown] = await Promise.all([
+    count("memory_records"), count("projects"), count("agents"), count("imports"),
+    db.prepare("SELECT kind, COUNT(*) AS count FROM memory_records GROUP BY kind ORDER BY count DESC, kind ASC").all<{ kind: string; count: number }>(),
+    db.prepare(`SELECT COALESCE(agent_id, 'unattributed') AS label, COUNT(*) AS count, MAX(updated_at) AS latestAt
+      FROM memory_records GROUP BY COALESCE(agent_id, 'unattributed') ORDER BY latestAt DESC, label ASC LIMIT 20`).all<{ label: string; count: number; latestAt: string | null }>(),
+    db.prepare(`SELECT p.id, p.name, COUNT(DISTINCT r.id) AS memories, COUNT(DISTINCT a.id) AS agents,
+      MAX(r.updated_at) AS latestAt FROM projects p
+      LEFT JOIN memory_records r ON r.project_id = p.id LEFT JOIN agents a ON a.project_id = p.id
+      GROUP BY p.id, p.name ORDER BY latestAt DESC, p.name ASC LIMIT 100`).all<{ id: string; name: string; memories: number; agents: number; latestAt: string | null }>(),
+    db.prepare("SELECT status, COUNT(*) AS count FROM imports GROUP BY status ORDER BY status ASC").all<{ status: string; count: number }>()
+  ]);
+  return {
+    memoryRecords, projects, agents, imports,
+    byKind: byKind.results.map(row => ({ kind: row.kind, count: Number(row.count) })),
+    activity: activity.results.map(row => ({ label: row.label, count: Number(row.count), latestAt: row.latestAt })),
+    projectBreakdown: projectBreakdown.results.map(row => ({ id: row.id, name: row.name, memories: Number(row.memories), agents: Number(row.agents), latestAt: row.latestAt })),
+    importBreakdown: importBreakdown.results.map(row => ({ status: row.status, count: Number(row.count) }))
+  };
 }
 
 export default {
@@ -102,6 +119,13 @@ export default {
         return new Response(renderDashboard(metrics), { headers: { "content-type": "text/html; charset=UTF-8", "cache-control": "no-store" } });
       }
       if (url.pathname === "/mcp") return await handleMcp(request, env);
+      if (url.pathname === "/graphql") {
+        if (request.method !== "POST") return json({ errors: [{ message: "GraphQL accepts POST only", extensions: { code: "METHOD_NOT_ALLOWED" } }] }, 405);
+        const principal = await authenticate(request, env);
+        await touchKey(env.DB!, principal);
+        const result = await executeGraphQL(env.DB!, principal, await readJson(request) as { query?: unknown; variables?: unknown });
+        return json(result, result.errors ? 400 : 200);
+      }
       const keyMatch = url.pathname.match(/^\/v1\/projects\/([^/]+)\/keys(?:\/([^/]+))?$/);
       if ((url.pathname === "/v1/projects" && request.method === "POST") || keyMatch) {
         await requireAdmin(request, env);

@@ -1,0 +1,31 @@
+{
+  "name": "goldfish",
+  "version": "0.1.0",
+  "description": "Project-scoped durable memory for Codex and compatible agents.",
+  "author": {
+    "name": "p5n-n3t",
+    "url": "https://github.com/p5n-n3t"
+  },
+  "homepage": "https://goldfish.ziopsyop.tech",
+  "repository": "https://github.com/p5n-n3t/goldfish",
+  "license": "MIT",
+  "keywords": ["memory", "agents", "checkpoints", "goldfish"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Goldfish",
+    "shortDescription": "Durable project memory for Codex.",
+    "longDescription": "Goldfish gives Codex project-scoped memory search, saves, checkpoints, and recovery through a remote MCP server.",
+    "developerName": "p5n-n3t",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write", "Search"],
+    "brandColor": "#F59E0B",
+    "composerIcon": "./assets/goldfish-logo.png",
+    "logo": "./assets/goldfish-logo.png",
+    "defaultPrompt": [
+      "Recall relevant Goldfish memory for this project.",
+      "Save a checkpoint for the current task.",
+      "Store this decision in Goldfish."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

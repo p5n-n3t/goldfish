@@ -3,6 +3,10 @@ export interface DashboardMetrics {
   projects: number;
   agents: number;
   imports: number;
+  byKind?: Array<{ kind: string; count: number }>;
+  activity?: Array<{ label: string; count: number; latestAt: string | null }>;
+  projectBreakdown?: Array<{ id: string; name: string; memories: number; agents: number; latestAt: string | null }>;
+  importBreakdown?: Array<{ status: string; count: number }>;
 }
 
 const unavailableCards = [
@@ -54,6 +58,10 @@ export function renderDashboard(metrics?: DashboardMetrics): string {
   const notice = metrics
     ? "<aside class=\"notice\"><strong>Live data.</strong> Counts are read from the Goldfish D1 ledger and refresh on every page load.</aside>"
     : "<aside class=\"notice\"><strong>Dashboard data is unavailable.</strong> Authentication and dashboard data sources have not been configured in this Worker baseline.</aside>";
+  const kindRows = (metrics?.byKind ?? []).map(item => `<li><span>${escapeHtml(item.kind)}</span><strong>${item.count.toLocaleString()}</strong></li>`).join("") || `<li><span>No records yet</span><strong>0</strong></li>`;
+  const activityRows = (metrics?.activity ?? []).map(item => `<li><span>${escapeHtml(item.label)}</span><strong>${item.count.toLocaleString()}</strong><small>${escapeHtml(item.latestAt ?? "No activity")}</small></li>`).join("") || `<li><span>No activity yet</span><strong>0</strong><small>Awaiting first write</small></li>`;
+  const projectRows = (metrics?.projectBreakdown ?? []).map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${item.memories.toLocaleString()}</td><td>${item.agents.toLocaleString()}</td><td>${escapeHtml(item.latestAt ?? "No activity")}</td></tr>`).join("") || `<tr><td colspan="4">No projects recorded.</td></tr>`;
+  const importRows = (metrics?.importBreakdown ?? []).map(item => `<li><span>${escapeHtml(item.status)}</span><strong>${item.count.toLocaleString()}</strong></li>`).join("") || `<li><span>No imports recorded</span><strong>0</strong></li>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -81,6 +89,14 @@ export function renderDashboard(metrics?: DashboardMetrics): string {
     .panel { padding: 1.35rem; border: 1px solid #2b3957; border-radius: 1rem; background: rgba(15, 23, 42, .78); }
     h2 { margin: 0 0 .7rem; font-size: 1.1rem; }
     .panel p { margin: 0; color: #cbd5e1; line-height: 1.55; }
+    .panel ul { list-style: none; margin: 0; padding: 0; }
+    .panel li { display: grid; grid-template-columns: 1fr auto; gap: .7rem; padding: .7rem 0; border-bottom: 1px solid #263552; color: #cbd5e1; }
+    .panel li:last-child { border-bottom: 0; }
+    .panel li strong { color: #f8fafc; }
+    .panel li small { grid-column: 1 / -1; color: #94a3b8; font-size: .78rem; }
+    table { width: 100%; border-collapse: collapse; color: #cbd5e1; font-size: .9rem; }
+    th, td { text-align: left; padding: .65rem .4rem; border-bottom: 1px solid #263552; }
+    th { color: #94a3b8; font-size: .75rem; letter-spacing: .05em; text-transform: uppercase; }
     footer { margin-top: 2rem; color: #94a3b8; font-size: .9rem; }
     @media (max-width: 800px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     @media (max-width: 560px) { main { padding-top: 2.25rem; } .grid, .sections { grid-template-columns: 1fr; } }
@@ -94,7 +110,10 @@ export function renderDashboard(metrics?: DashboardMetrics): string {
     ${notice}
     <section class="grid" aria-label="Service overview">${statusCards}</section>
     <section class="sections" aria-label="Operational detail">
-      <article class="panel"><h2>Imports</h2><p>${metrics ? `${metrics.imports.toLocaleString()} import ledger entries are recorded in D1.` : "Import history is unavailable until the D1 binding is connected."}</p></article>
+      <article class="panel"><h2>Memory kinds</h2><ul>${kindRows}</ul></article>
+      <article class="panel"><h2>Latest activity</h2><ul>${activityRows}</ul></article>
+      <article class="panel" style="grid-column: 1 / -1"><h2>Projects</h2><table><thead><tr><th>Project</th><th>Memories</th><th>Agents</th><th>Latest activity</th></tr></thead><tbody>${projectRows}</tbody></table></article>
+      <article class="panel"><h2>Imports</h2><ul>${importRows}</ul><p style="margin-top:.75rem">${metrics ? `${metrics.imports.toLocaleString()} import ledger entries are recorded in D1.` : "Import history is unavailable until the D1 binding is connected."}</p></article>
       <article class="panel"><h2>Retrieval</h2><p>Goldfish currently uses project-scoped lexical search. Recall quality, latency, and hit-rate analytics will appear after request telemetry is added; no values are estimated.</p></article>
     </section>
     <footer>Goldfish dashboard · ${metrics ? "live D1 totals" : "no live metrics are displayed"}.</footer>

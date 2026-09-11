@@ -4,6 +4,18 @@ The Worker implements project-scoped API keys, REST memory endpoints, and
 stateless Streamable HTTP MCP at `/mcp`. Retrieval currently uses literal,
 case-insensitive SQLite `LIKE` substring matching; no semantic ranking is claimed.
 
+## GraphQL read endpoint
+
+`POST /graphql` accepts the same project API key as REST and MCP. It is a
+read-only, project-scoped GraphQL surface; mutations are rejected. The body is
+`{"query":"{ project { id name } search(query: \"checkpoint\", limit: 10) { id content kind } dashboard { memoryRecords agents } }"}`.
+
+The root fields are `project`, `memory(id)`, `search(query, limit)`, and
+`dashboard`. Project fields are `id`, `name`, `createdAt`, and `updatedAt`;
+memory fields mirror the REST record; dashboard fields are `memoryRecords`,
+`projects`, `agents`, and `imports`. Every lookup is forced to the project
+bound to the bearer key, including `memory(id)`.
+
 ## Bootstrap and key lifecycle
 
 Apply `migrations/0001_initial.sql` to the D1 database bound as `DB`. Configure
