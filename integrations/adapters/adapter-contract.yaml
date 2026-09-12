@@ -9,6 +9,7 @@ endpoint:
 authentication:
   preferred: scoped_bearer_api_key
   future: oauth_2_1
+  admin_control_plane: dashboard_session_only_never_an_adapter_credential
   scopes: [memory.read, memory.write]
   secret_policy: Environment variables and client credential stores only; never repository files.
 required_tools:
@@ -27,7 +28,6 @@ record_mapping:
   projectId: exact project folder slug
   agentId: stable adapter identity
   sessionId: client session identifier
-  metadata.owner_id: jq
   metadata.type: prompt_record | checkpoint | decision | architecture | user_preference | project_state | project_init
   metadata.status: received | in_progress | completed | crashed | paused
 rest_save_body:

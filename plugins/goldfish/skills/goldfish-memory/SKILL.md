@@ -7,7 +7,9 @@ description: Use Goldfish as the durable, project-scoped memory layer for Codex 
 
 Use the configured `goldfish` MCP server for durable context. This skill is
 project-scoped: the current project folder slug is the `projectId` boundary.
-Never search or write another project, even when the owner is the same.
+When the configured credential is the owner's workspace key, always send that
+exact folder-derived `projectId`; do not rely on any implicit project default.
+Project-scoped keys must never search or write another project.
 
 ## Startup
 
@@ -35,7 +37,6 @@ for compact conversation context. Preserve these metadata fields where known:
 
 ```json
 {
-  "owner_id": "jq",
   "type": "prompt_record|checkpoint|decision|architecture|user_preference|project_state|project_init",
   "date": "YYYY-MM-DD",
   "status": "received|in_progress|completed|crashed|paused",
@@ -60,4 +61,3 @@ final `checkpoint` and a `project_state` record.
 For a resumed or crashed task, retrieve the latest incomplete prompt record and
 latest checkpoint for this project and agent, then resume their stated next
 action. If either is absent, record the gap before proceeding.
-

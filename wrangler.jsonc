@@ -6,6 +6,9 @@
   "account_id": "0228e3fe174bbc185f30b1d4eaf5f166",
   "workers_dev": true,
   "compatibility_flags": ["global_fetch_strictly_public"],
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
   "kv_namespaces": [
     {
       "binding": "OAUTH_KV",

@@ -1,19 +1,72 @@
 import { contentHash, validateMemoryInput, validateSearchQuery } from "./domain";
-import { renderDashboard, type DashboardMetrics } from "./dashboard";
+import { renderDashboard } from "./dashboard";
 import { LexicalD1MemoryRepository, type D1DatabaseLike } from "./repositories";
-import { authenticate, authorize, HttpError, issueKey, requireAdmin, revokeKey, touchKey, type Principal } from "./auth";
+import { authenticate, authorize, HttpError, issueKey, issueWorkspaceKey, requireAdmin, revokeKey, touchKey, type Principal, createDashboardSession, dashboardCookie, clearedDashboardCookie, requireDashboard, verifyDashboardPassword, requireSameOrigin } from "./auth";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { executeGraphQL } from "./graphql";
+import { handleAdminApi, renderAdminLoginShell, runScheduledCuration } from "./admin";
+
+interface DashboardLoginKV {
+  get(key: string): Promise<string | null>;
+  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
+}
 
 export interface Env {
   DB?: D1DatabaseLike;
   ADMIN_BOOTSTRAP_SECRET?: string;
   AUTH_ISSUER?: string;
   AUTH_AUDIENCE?: string;
+  DASHBOARD_PASSWORD?: string;
+  ARTIFACTS?: import("./admin").R2Artifacts;
+  AI?: import("./admin").CopilotAI;
+  /** Shared Cloudflare KV; Goldfish uses a namespaced key for best-effort login throttling. */
+  OAUTH_KV?: DashboardLoginKV;
 }
-const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "cache-control": "no-store" } });
+const baseSecurityHeaders = {
+  "cache-control": "no-store",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+  "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+};
+const json = (body: unknown, status = 200) => Response.json(body, { status, headers: baseSecurityHeaders });
+const dashboardNonce = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(18))));
+const dashboardHeaders = (nonce: string) => ({
+  ...baseSecurityHeaders,
+  "content-type": "text/html; charset=UTF-8",
+  "x-frame-options": "DENY",
+  "content-security-policy": [
+    "default-src 'self'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "connect-src 'self'",
+    "img-src 'self' data:",
+    `script-src 'self' 'nonce-${nonce}'`,
+    `style-src 'self' 'nonce-${nonce}'`,
+    "style-src-attr 'unsafe-inline'"
+  ].join("; ")
+});
+const dashboardPage = (html: string, nonce: string, head = false) => new Response(head ? null : html, { headers: dashboardHeaders(nonce) });
+type DashboardLoginAttempt = { count: number; resetAt: number };
+async function dashboardLoginAttempt(request: Request, env: Env): Promise<{ key: string; count: number } | null> {
+  const clientIp = request.headers.get("cf-connecting-ip");
+  if (!clientIp || !env.OAUTH_KV) return null;
+  const key = `goldfish:dashboard-login:${await contentHash(clientIp)}`;
+  const raw = await env.OAUTH_KV.get(key);
+  if (!raw) return { key, count: 0 };
+  try {
+    const parsed = JSON.parse(raw) as DashboardLoginAttempt;
+    return parsed.resetAt > Date.now() && Number.isInteger(parsed.count) && parsed.count > 0 ? { key, count: parsed.count } : { key, count: 0 };
+  } catch { return { key, count: 0 }; }
+}
+async function recordFailedDashboardLogin(env: Env, attempt: { key: string; count: number } | null): Promise<void> {
+  if (!attempt || !env.OAUTH_KV) return;
+  const resetAt = Date.now() + 10 * 60 * 1000;
+  await env.OAUTH_KV.put(attempt.key, JSON.stringify({ count: Math.min(attempt.count + 1, 99), resetAt }), { expirationTtl: 10 * 60 });
+}
 const idSchema = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 function validId(value: unknown): string {
   const parsed = idSchema.safeParse(value);
@@ -33,6 +86,7 @@ export function goldfishMcpServer(db: D1DatabaseLike, principal: Principal): Mcp
   const repository = new LexicalD1MemoryRepository(db);
   const run = async (projectId: string | undefined, operation: (project: string) => Promise<unknown>) => {
     try {
+      if (!projectId && principal.accessScope === "workspace") throw new HttpError(400, "PROJECT_ID_REQUIRED", "Workspace keys require an explicit projectId");
       const project = projectId ?? principal.projectId;
       authorize(principal, project);
       await touchKey(db, principal);
@@ -45,11 +99,11 @@ export function goldfishMcpServer(db: D1DatabaseLike, principal: Principal): Mcp
   const memoryShape = { projectId, content: z.string().min(1).max(100_000), kind: z.enum(["fact", "conversation", "document", "task"]),
     metadata: z.record(z.string(), z.unknown()).optional(), agentId: idSchema.optional(), sessionId: idSchema.optional() };
   server.registerTool("memory_status", { title: "Goldfish status", description: "Reports the authorized project and retrieval mode", annotations: { readOnlyHint: true } },
-    async () => ({ content: [{ type: "text", text: JSON.stringify({ ok: true, projectId: principal.projectId, retrieval: "lexical" }) }] }));
+    async () => ({ content: [{ type: "text", text: JSON.stringify({ ok: true, projectId: principal.projectId, accessScope: principal.accessScope, retrieval: "lexical" }) }] }));
   server.registerTool("memory_save", { description: "Save a project memory with agent and session provenance; identical content is deduplicated within the project", inputSchema: memoryShape },
-    async ({ projectId, ...input }) => run(projectId, async project => ({ memory: await saveMemory(repository, project, input) })));
+    async ({ projectId, ...input }) => run(projectId, async project => { if (principal.accessScope === "workspace") await repository.ensureProject(project); return { memory: await saveMemory(repository, project, input) }; }));
   server.registerTool("memory_checkpoint", { description: "Save a resumable project checkpoint as a task memory", inputSchema: { ...memoryShape, kind: z.literal("task").optional() } },
-    async ({ projectId, ...input }) => run(projectId, async project => ({ memory: await saveMemory(repository, project, input, true) })));
+    async ({ projectId, ...input }) => run(projectId, async project => { if (principal.accessScope === "workspace") await repository.ensureProject(project); return { memory: await saveMemory(repository, project, input, true) }; }));
   server.registerTool("memory_search", { description: "Search saved memory text within the authorized project using literal substring matching", annotations: { readOnlyHint: true },
     inputSchema: { projectId, query: z.string().trim().min(1).max(2000), limit: z.number().int().min(1).max(100).optional() } },
     async ({ projectId, ...input }) => run(projectId, async project => ({ retrieval: "lexical", results: await repository.search(project, validateSearchQuery(input)) })));
@@ -60,7 +114,7 @@ export function goldfishMcpServer(db: D1DatabaseLike, principal: Principal): Mcp
       return { memory };
     }));
   server.registerTool("memory_list_projects", { description: "List projects accessible to the current project-scoped API key", annotations: { readOnlyHint: true }, inputSchema: {} },
-    async () => run(undefined, async project => ({ projects: await repository.listProjects(project) })));
+    async () => { await touchKey(db, principal); return { content: [{ type: "text", text: JSON.stringify({ projects: principal.accessScope === "workspace" ? await repository.listAllProjects() : await repository.listProjects(principal.projectId) }) }] }; });
   return server;
 }
 
@@ -84,39 +138,36 @@ async function readJson(request: Request): Promise<unknown> {
   if (text.length > 512_000) throw new HttpError(413, "BODY_TOO_LARGE");
   try { return JSON.parse(text); } catch { throw new HttpError(400, "INVALID_JSON"); }
 }
-async function dashboardMetrics(db: D1DatabaseLike): Promise<DashboardMetrics> {
-  const count = async (table: "memory_records" | "projects" | "agents" | "imports"): Promise<number> => {
-    const result = await db.prepare(`SELECT COUNT(*) AS total FROM ${table}`).all<{ total: number }>();
-    return Number(result.results[0]?.total ?? 0);
-  };
-  const [memoryRecords, projects, agents, imports, byKind, activity, projectBreakdown, importBreakdown] = await Promise.all([
-    count("memory_records"), count("projects"), count("agents"), count("imports"),
-    db.prepare("SELECT kind, COUNT(*) AS count FROM memory_records GROUP BY kind ORDER BY count DESC, kind ASC").all<{ kind: string; count: number }>(),
-    db.prepare(`SELECT COALESCE(agent_id, 'unattributed') AS label, COUNT(*) AS count, MAX(updated_at) AS latestAt
-      FROM memory_records GROUP BY COALESCE(agent_id, 'unattributed') ORDER BY latestAt DESC, label ASC LIMIT 20`).all<{ label: string; count: number; latestAt: string | null }>(),
-    db.prepare(`SELECT p.id, p.name, COUNT(DISTINCT r.id) AS memories, COUNT(DISTINCT a.id) AS agents,
-      MAX(r.updated_at) AS latestAt FROM projects p
-      LEFT JOIN memory_records r ON r.project_id = p.id LEFT JOIN agents a ON a.project_id = p.id
-      GROUP BY p.id, p.name ORDER BY latestAt DESC, p.name ASC LIMIT 100`).all<{ id: string; name: string; memories: number; agents: number; latestAt: string | null }>(),
-    db.prepare("SELECT status, COUNT(*) AS count FROM imports GROUP BY status ORDER BY status ASC").all<{ status: string; count: number }>()
-  ]);
-  return {
-    memoryRecords, projects, agents, imports,
-    byKind: byKind.results.map(row => ({ kind: row.kind, count: Number(row.count) })),
-    activity: activity.results.map(row => ({ label: row.label, count: Number(row.count), latestAt: row.latestAt })),
-    projectBreakdown: projectBreakdown.results.map(row => ({ id: row.id, name: row.name, memories: Number(row.memories), agents: Number(row.agents), latestAt: row.latestAt })),
-    importBreakdown: importBreakdown.results.map(row => ({ status: row.status, count: Number(row.count) }))
-  };
-}
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/health") return json({ ok: true, service: "goldfish-worker" });
-      if (request.method === "GET" && url.pathname === "/") {
-        const metrics = env.DB ? await dashboardMetrics(env.DB).catch(() => undefined) : undefined;
-        return new Response(renderDashboard(metrics), { headers: { "content-type": "text/html; charset=UTF-8", "cache-control": "no-store" } });
+      if (request.method === "POST" && url.pathname === "/admin/login") {
+        requireSameOrigin(request);
+        const attempt = await dashboardLoginAttempt(request, env);
+        if (attempt && attempt.count >= 8) throw new HttpError(429, "DASHBOARD_LOGIN_RATE_LIMITED", "Too many sign-in attempts. Try again in a few minutes.");
+        const input = await readJson(request);
+        const password = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>).password : undefined;
+        try {
+          await verifyDashboardPassword(password, env);
+        } catch (error) {
+          await recordFailedDashboardLogin(env, attempt);
+          throw error;
+        }
+        const response = json({ authenticated: true }); response.headers.set("set-cookie", dashboardCookie(await createDashboardSession(env))); return response;
+      }
+      if (request.method === "POST" && url.pathname === "/admin/logout") { requireSameOrigin(request); const response = json({ authenticated: false }); response.headers.set("set-cookie", clearedDashboardCookie); return response; }
+      if (request.method === "GET" && url.pathname === "/admin/session") { await requireDashboard(request, env); return json({ authenticated: true, role: "dashboard-admin" }); }
+      if (url.pathname.startsWith("/admin/api/")) { await requireDashboard(request, env); if (request.method !== "GET" && request.method !== "HEAD") requireSameOrigin(request); return await handleAdminApi(request, env); }
+      if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/") {
+        const nonce = dashboardNonce();
+        try { await requireDashboard(request, env); }
+        catch (error) {
+          if (error instanceof HttpError && error.status === 401) return dashboardPage(renderAdminLoginShell(nonce), nonce, request.method === "HEAD");
+          throw error;
+        }
+        return dashboardPage(renderDashboard(undefined, nonce), nonce, request.method === "HEAD");
       }
       if (url.pathname === "/mcp") return await handleMcp(request, env);
       if (url.pathname === "/graphql") {
@@ -125,6 +176,13 @@ export default {
         await touchKey(env.DB!, principal);
         const result = await executeGraphQL(env.DB!, principal, await readJson(request) as { query?: unknown; variables?: unknown });
         return json(result, result.errors ? 400 : 200);
+      }
+      if (url.pathname === "/v1/workspace-keys" && request.method === "POST") {
+        await requireAdmin(request, env);
+        const parsed = z.object({ anchorProjectId: idSchema.optional(), label: z.string().max(200).optional() }).safeParse(await readJson(request));
+        if (!parsed.success) throw new HttpError(400, "INVALID_WORKSPACE_KEY_INPUT");
+        const anchorProjectId = parsed.data.anchorProjectId ?? "goldfish";
+        return json(await issueWorkspaceKey(env.DB!, anchorProjectId, parsed.data.label), 201);
       }
       const keyMatch = url.pathname.match(/^\/v1\/projects\/([^/]+)\/keys(?:\/([^/]+))?$/);
       if ((url.pathname === "/v1/projects" && request.method === "POST") || keyMatch) {
@@ -152,7 +210,8 @@ export default {
       if (url.pathname === "/v1/projects" && request.method === "GET") {
         const principal = await authenticate(request, env);
         await touchKey(env.DB!, principal);
-        return json({ projects: await new LexicalD1MemoryRepository(env.DB!).listProjects(principal.projectId) });
+        const repository = new LexicalD1MemoryRepository(env.DB!);
+        return json({ projects: principal.accessScope === "workspace" ? await repository.listAllProjects() : await repository.listProjects(principal.projectId) });
       }
       const memoryMatch = url.pathname.match(/^\/v1\/projects\/([^/]+)\/(memory|checkpoints)(?:\/([^/]+))?$/);
       if (memoryMatch) {
@@ -177,6 +236,7 @@ export default {
           if (!action) {
             try { validateMemoryInput(memoryMatch[2] === "checkpoints" && body && typeof body === "object" ? { ...body, kind: "task" } : body); }
             catch (error) { throw new HttpError(400, "INVALID_MEMORY", (error as Error).message); }
+            if (principal.accessScope === "workspace") await repository.ensureProject(projectId);
             return json({ projectId, memory: await saveMemory(repository, projectId, body, memoryMatch[2] === "checkpoints") }, 201);
           }
         }
@@ -192,5 +252,8 @@ export default {
       if (error instanceof URIError) return json({ error: "INVALID_PATH" }, 400);
       return json({ error: "INTERNAL_ERROR", message: "The operation could not be completed" }, 500);
     }
+  },
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(runScheduledCuration(env));
   }
 };

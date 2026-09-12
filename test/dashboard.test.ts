@@ -2,27 +2,30 @@ import { describe, expect, it } from "vitest";
 import { renderDashboard } from "../src/dashboard";
 
 describe("dashboard shell", () => {
-  it("renders an honest unavailable state without fabricating metrics", () => {
+  it("renders a private, authenticated dashboard shell without fabricated metrics", () => {
     const html = renderDashboard();
 
-    expect(html).toContain("Project memory, with an honest operational view.");
-    expect(html).toContain("Dashboard data is unavailable.");
-    expect(html).toContain("Memory records");
-    expect(html).toContain("Projects");
+    expect(html).toContain("Goldfish · Memory control room");
+    expect(html).toContain("Your memory stays private.");
+    expect(html).toContain("Dashboard password");
+    expect(html).toContain("Memories");
     expect(html).toContain("Agents");
-    expect(html).toContain("Recent activity");
-    expect(html).toContain("Imports");
-    expect(html).toContain("Retrieval");
-    expect(html).not.toMatch(/\b0\b memories|\b0\b projects|\b0\b agents/i);
+    expect(html).toContain("Memory explorer");
+    expect(html).toContain("Relationship graph");
+    expect(html).toContain("Goldfish Copilot");
+    expect(html).toContain("Settings & taxonomy");
+    expect(html).toContain("Optional attachment (up to 5 MB)");
+    expect(html).not.toContain("203");
   });
 
-  it("renders live D1 aggregates when supplied by the Worker", () => {
+  it("does not serialize supplied aggregate metrics into the unauthenticated document", () => {
     const html = renderDashboard({ memoryRecords: 203, projects: 1, agents: 2, imports: 1 });
 
-    expect(html).toContain("Live data.");
-    expect(html).toContain("203");
-    expect(html).toContain("1 import ledger entries");
-    expect(html).toContain("project-scoped lexical search");
-    expect(html).not.toContain("Dashboard data is unavailable.");
+    expect(html).not.toContain("203");
+    expect(html).toContain("/admin/login");
+    expect(html).toContain("/admin/api/projects/");
+    expect(html).toContain("graph/rebuild");
+    expect(html).toContain("copilot/");
+    expect(html).not.toContain("/admin/memories/search");
   });
 });

@@ -2,8 +2,8 @@
 
 **State: adapter contract ready; client configuration format unverified.**
 
-Use the remote MCP endpoint `https://goldfish.ziopsyop.tech/mcp` with OAuth
-where the client supports it. For an API-key-only pilot, inject
+Use the remote MCP endpoint `https://goldfish.ziopsyop.tech/mcp` with a
+project-scoped bearer key. OAuth discovery is not implemented, so inject
 `Authorization: Bearer ${GOLDFISH_API_KEY}` through Antigravity’s protected
 credential mechanism. Do not put a token in an agent prompt, a repository
 instruction file, or a Commandork worker package.

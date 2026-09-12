@@ -1,8 +1,9 @@
 # TEMPLATE ONLY — do not add this to ~/.codex/config.toml until the Goldfish
 # live-API checklist has passed. It makes no changes by itself.
 #
-# Requires: Streamable HTTP MCP; OAuth discovery or GOLDFISH_API_KEY provisioned
-# for a least-privilege pilot identity; all required tools visible to the client.
+# Requires: Streamable HTTP MCP and a project-scoped GOLDFISH_API_KEY for a
+# least-privilege pilot identity; all required tools visible to the client.
+# OAuth discovery is not implemented by the current runtime.
 
 [mcp_servers.goldfish]
 url = "https://goldfish.ziopsyop.tech/mcp"

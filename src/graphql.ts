@@ -22,6 +22,30 @@ const projectShape = (p: Record<string, unknown>, selected: string[]) => {
 };
 const memoryShape = (m: Record<string, unknown>, selected: string[]) => selected.length ? Object.fromEntries(selected.filter(k => k in m).map(k => [k, m[k]])) : m;
 
+type ProjectResolution = { projectId: string } | { error: GraphQLResult };
+
+/**
+ * Project keys retain their implicit single-project behavior. A workspace key
+ * can read several ledgers, so GraphQL must make the target explicit instead
+ * of silently falling back to its anchor project.
+ */
+function resolveProject(principal: Principal, args: string, variables: Record<string, unknown>, projectField = false): ProjectResolution {
+  let requested = scalar(argument(args, "projectId", variables));
+  if (requested === undefined && projectField) requested = scalar(argument(args, "id", variables));
+  if (requested === undefined) {
+    if (principal.accessScope === "workspace") return { error: gqlError("Workspace keys require an explicit projectId", "PROJECT_ID_REQUIRED") };
+    return { projectId: principal.projectId };
+  }
+  if (typeof requested !== "string" || !requested) return { error: gqlError("projectId must be a non-empty string", "INVALID_ARGUMENT") };
+  try {
+    authorize(principal, requested);
+    return { projectId: requested };
+  } catch (cause) {
+    if (cause instanceof HttpError) return { error: gqlError(cause.message, cause.code) };
+    return { error: gqlError("The API key cannot access another project", "PROJECT_FORBIDDEN") };
+  }
+}
+
 export async function executeGraphQL(db: D1DatabaseLike, principal: Principal, body: GraphQLRequest): Promise<GraphQLResult> {
   if (typeof body.query !== "string" || !body.query.trim()) return gqlError("A GraphQL query is required", "INVALID_QUERY");
   const query = body.query.trim();
@@ -31,28 +55,35 @@ export async function executeGraphQL(db: D1DatabaseLike, principal: Principal, b
   const repository = new LexicalD1MemoryRepository(db); const data: Record<string, unknown> = {};
   if (requested(query, "project")) {
     const projectArgs = query.match(/\bproject\s*\(([^)]*)\)/)?.[1] ?? "";
-    const requestedProject = scalar(argument(projectArgs, "id", variables));
-    if (requestedProject !== undefined && requestedProject !== principal.projectId) return gqlError("The API key cannot access another project", "PROJECT_FORBIDDEN");
-    const project = (await repository.listProjects(principal.projectId))[0];
+    const resolved = resolveProject(principal, projectArgs, variables, true);
+    if ("error" in resolved) return resolved.error;
+    const project = (await repository.listProjects(resolved.projectId))[0];
     if (!project) return gqlError("The authorized project does not exist", "PROJECT_NOT_FOUND");
     data.project = projectShape(project as unknown as Record<string, unknown>, fields(query, "project"));
   }
   if (requested(query, "memory")) {
     const args = query.match(/\bmemory\s*\(([^)]*)\)/)?.[1] ?? ""; const id = scalar(argument(args, "id", variables));
     if (typeof id !== "string" || !id) return gqlError("memory requires an id argument", "INVALID_ARGUMENT");
-    const memory = await repository.get(principal.projectId, id);
+    const resolved = resolveProject(principal, args, variables);
+    if ("error" in resolved) return resolved.error;
+    const memory = await repository.get(resolved.projectId, id);
     data.memory = memory ? memoryShape(memory as unknown as Record<string, unknown>, fields(query, "memory")) : null;
   }
   if (requested(query, "search")) {
     const args = query.match(/\bsearch\s*\(([^)]*)\)/)?.[1] ?? ""; const queryValue = scalar(argument(args, "query", variables)); const limit = scalar(argument(args, "limit", variables));
     if (typeof queryValue !== "string") return gqlError("search requires a query argument", "INVALID_ARGUMENT");
     let input; try { input = validateSearchQuery({ query: queryValue, limit }); } catch (cause) { return gqlError(cause instanceof Error ? cause.message : "Invalid search arguments", "INVALID_ARGUMENT"); }
-    data.search = (await repository.search(principal.projectId, input)).map(m => memoryShape(m as unknown as Record<string, unknown>, fields(query, "search")));
+    const resolved = resolveProject(principal, args, variables);
+    if ("error" in resolved) return resolved.error;
+    data.search = (await repository.search(resolved.projectId, input)).map(m => memoryShape(m as unknown as Record<string, unknown>, fields(query, "search")));
   }
   if (requested(query, "dashboard")) {
-    const count = async (table: "memory_records" | "agents" | "imports") => (await db.prepare(`SELECT COUNT(*) AS total FROM ${table} WHERE project_id = ?`).bind(principal.projectId).all<{ total: number }>()).results[0]?.total ?? 0;
+    const args = query.match(/\bdashboard\s*\(([^)]*)\)/)?.[1] ?? "";
+    const resolved = resolveProject(principal, args, variables);
+    if ("error" in resolved) return resolved.error;
+    const count = async (table: "memory_records" | "agents" | "imports") => (await db.prepare(`SELECT COUNT(*) AS total FROM ${table} WHERE project_id = ?`).bind(resolved.projectId).all<{ total: number }>()).results[0]?.total ?? 0;
     const [memoryRecords, agents, imports] = await Promise.all([count("memory_records"), count("agents"), count("imports")]);
-    const all = { memoryRecords, projects: (await repository.listProjects(principal.projectId)).length, agents, imports }; const selected = fields(query, "dashboard");
+    const all = { memoryRecords, projects: (await repository.listProjects(resolved.projectId)).length, agents, imports }; const selected = fields(query, "dashboard");
     data.dashboard = selected.length ? Object.fromEntries(selected.filter(k => k in all).map(k => [k, all[k as keyof typeof all]])) : all;
   }
   return Object.keys(data).length ? { data } : gqlError("The query must select project, memory, search, or dashboard", "INVALID_QUERY");
