@@ -48,7 +48,10 @@ export class LexicalD1MemoryRepository implements MemoryRepository {
       ...(record.agentId || record.sessionId ? { _goldfish_provenance: { external_agent_id: record.agentId, external_session_id: record.sessionId } } : {})
     };
     if (storedAgentId) {
-      statements.push(this.db.prepare("INSERT OR IGNORE INTO agents (id, project_id, name) VALUES (?, ?, ?)").bind(storedAgentId, projectId, record.agentId));
+      // `agents` also has UNIQUE(project_id, name). Use the internal identity
+      // as its name so migrated legacy rows with the same display name cannot
+      // block a project-qualified agent from being created.
+      statements.push(this.db.prepare("INSERT OR IGNORE INTO agents (id, project_id, name) VALUES (?, ?, ?)").bind(storedAgentId, projectId, storedAgentId));
     }
     if (storedSessionId) {
       statements.push(this.db.prepare("INSERT OR IGNORE INTO sessions (id, project_id, agent_id, external_id) SELECT ?, ?, ?, ? WHERE ? IS NULL OR EXISTS (SELECT 1 FROM agents WHERE id = ? AND project_id = ?)").bind(storedSessionId, projectId, storedAgentId ?? null, record.sessionId, storedAgentId ?? null, storedAgentId ?? null, projectId));

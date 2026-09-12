@@ -21,7 +21,7 @@ describe("stage-mem0-csv", () => {
       writeFileSync(existing, `${scopeHash({ project_id: "beta", user_id: "u1", agent_id: "bot", text: "Keep project records scoped." })}\n`);
       const report = await stageCsv({ input, outputDir: join(directory, "review"), existingHashesPath: existing });
       expect(report).toMatchObject({ rows_read: 5, staged: 2, quarantined: 1, duplicates_in_source: 1, duplicates_in_existing_set: 1 });
-      const staged = readFileSync(join(directory, "review", "staged.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+      const staged = readFileSync(join(directory, "review", "staged.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
       expect(staged[0]).toMatchObject({ source_row: 2, source_index: 0, source_uuid: "a1", categories: "Architecture" });
       expect(staged[1].text).toBe("quoted, text with detail");
     } finally { rmSync(directory, { recursive: true, force: true }); }
