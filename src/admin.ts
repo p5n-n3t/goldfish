@@ -306,7 +306,7 @@ async function projectSummaries(db: D1DatabaseLike, env: AdminEnv, projectId: st
   const rows = await db.prepare(`${memorySelect} WHERE ${where.join(" AND ")} ORDER BY r.updated_at DESC LIMIT 200`).bind(...values).all<MemoryRow>();
   if (!rows.results.length) throw new HttpError(400, "NO_MEMORIES_TO_SUMMARIZE");
   const sources = rows.results.map(row => shapeMemory(row, true));
-  const sourceText = sources.map((source, index) => `${index + 1}. [${source.id}] ${String(source.contentPreview).slice(0, 1_200)}`).join("\n").slice(0, 80_000);
+  const sourceText = rows.results.map((row, index) => `${index + 1}. [${row.id}] ${row.content.slice(0, 1_200)}`).join("\n").slice(0, 80_000);
   let content = `Project brief draft for ${projectId}\n\nSource memories: ${sources.length}.\n\n${sourceText.slice(0, 12_000)}`; let modelId: string | null = null;
   if (env.AI) {
     const result = await env.AI.run("@cf/meta/llama-3.1-8b-instruct-fast", { messages: [{ role: "system", content: "Create a concise, factual project brief. Separate durable architecture/preferences, current state, decisions, blockers, and stale or contradictory material. Do not invent facts. Mention source memory IDs in brackets." }, { role: "user", content: sourceText }] });

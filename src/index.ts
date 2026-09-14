@@ -197,7 +197,10 @@ export default {
           throw error;
         }
         if (env.ASSETS) {
-          const assetUrl = new URL("/index.html", url);
+          // Cloudflare Assets normalizes `/index.html` to `/`. Fetching it from
+          // a Worker that owns `/` creates a redirect loop, so the build emits
+          // a stable non-index alias for the protected dashboard shell.
+          const assetUrl = new URL("/goldfish-dashboard", url);
           const asset = await env.ASSETS.fetch(new Request(assetUrl, request));
           const headers = new Headers(asset.headers);
           for (const [name, value] of Object.entries(dashboardHeaders(nonce))) headers.set(name, value);

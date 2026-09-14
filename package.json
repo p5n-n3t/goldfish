@@ -5,7 +5,7 @@
   "description": "A Cloudflare-native, project-first memory layer for AI agents.",
   "type": "module",
   "scripts": {
-    "build:dashboard": "vite build --config vite.dashboard.config.js",
+    "build:dashboard": "node scripts/build-dashboard.mjs",
     "dev:dashboard": "vite dev --config vite.dashboard.config.js",
     "dev": "npm run build:dashboard && wrangler dev",
     "typecheck": "tsc --noEmit",

@@ -1,3 +1,7 @@
+// Runtime coverage for a standalone JavaScript CLI; Vitest executes the
+// module directly, while TypeScript intentionally has no static contract for
+// arbitrary .mjs command-line tools.
+// @ts-nocheck
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
