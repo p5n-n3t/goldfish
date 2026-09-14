@@ -6,7 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { executeGraphQL } from "./graphql";
-import { handleAdminApi, renderAdminLoginShell, runScheduledCuration } from "./admin";
+import { handleAdminApi, renderAdminLoginShell, runScheduledCuration, runScheduledSummaries } from "./admin";
 import { classifyRequest, recordRequestEvent, type RequestMemoryLinkType, type RequestProtocol } from "./request-telemetry";
 
 interface DashboardLoginKV {
@@ -291,5 +291,6 @@ export default {
   },
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(runScheduledCuration(env));
+    ctx.waitUntil(runScheduledSummaries(env));
   }
 };

@@ -330,6 +330,21 @@ async function activateSummary(db: D1DatabaseLike, projectId: string, summaryId:
   return { id: summaryId, status: "active" };
 }
 
+/** Creates reviewable scheduled briefs only for projects that opt in. Drafts
+ * never replace an active brief until the owner explicitly activates one. */
+export async function runScheduledSummaries(env: AdminEnv): Promise<{ projects: number; drafts: number }> {
+  if (!env.DB) return { projects: 0, drafts: 0 };
+  const enabled = await env.DB.prepare("SELECT project_id FROM project_settings WHERE auto_summarize_enabled = 1").all<{ project_id: string }>();
+  let drafts = 0;
+  for (const item of enabled.results) {
+    const latest = await env.DB.prepare("SELECT created_at FROM project_summaries WHERE project_id = ? ORDER BY created_at DESC LIMIT 1").bind(item.project_id).all<{ created_at: string }>();
+    const changed = await env.DB.prepare("SELECT COUNT(*) AS count FROM memory_records WHERE project_id = ? AND lifecycle_status != 'deleted' AND updated_at > COALESCE(?, '1970-01-01')").bind(item.project_id, latest.results[0]?.created_at ?? null).all<{ count: number }>();
+    if (Number(changed.results[0]?.count ?? 0) < 8) continue;
+    try { await projectSummaries(env.DB, env, item.project_id, { title: "Scheduled project brief" }); drafts += 1; } catch { /* one project must not block the scheduled ledger sweep */ }
+  }
+  return { projects: enabled.results.length, drafts };
+}
+
 async function auditList(db: D1DatabaseLike, url: URL) {
   const projectId = url.searchParams.get("projectId"); const limit = asNumber(url.searchParams.get("limit"), 200, 1, 500);
   if (projectId) validId(projectId, "projectId"); const result = projectId
