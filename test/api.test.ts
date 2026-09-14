@@ -4,6 +4,7 @@ import schema from "../migrations/0001_initial.sql?raw";
 import adminSchema from "../migrations/0002_admin_memory_lifecycle.sql?raw";
 import foundationSchema from "../migrations/0003_admin_dashboard_foundation.sql?raw";
 import workspaceKeySchema from "../migrations/0004_workspace_agent_keys.sql?raw";
+import intelligenceSchema from "../migrations/0005_request_and_project_intelligence.sql?raw";
 import worker, { type Env } from "../src/index";
 import { contentHash } from "../src/domain";
 import type { D1DatabaseLike } from "../src/repositories";
@@ -25,7 +26,7 @@ const data = async (response: Response) => response.json() as Promise<Record<str
 beforeAll(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: "export default { fetch() { return new Response('ok') } }", compatibilityDate: "2025-09-01", d1Databases: ["DB"] }));
   const db = await mf.getD1Database("DB");
-  await db.batch([...schema.split(";"), ...adminSchema.split(";"), ...foundationSchema.split(";"), ...workspaceKeySchema.split(";")].filter(sql => sql.trim()).map(sql => db.prepare(sql)));
+  await db.batch([...schema.split(";"), ...adminSchema.split(";"), ...foundationSchema.split(";"), ...workspaceKeySchema.split(";"), ...intelligenceSchema.split(";")].filter(sql => sql.trim()).map(sql => db.prepare(sql)));
   env = { DB: db as unknown as D1DatabaseLike, ADMIN_BOOTSTRAP_SECRET: admin, DASHBOARD_PASSWORD: "test-only-dashboard-password-with-at-least-16-characters", ARTIFACTS: { put: async (key, value) => { artifacts.set(key, new Uint8Array(value)); }, get: async key => { const value = artifacts.get(key); if (!value) return null; const copy = new Uint8Array(value.byteLength); copy.set(value); return { body: new Response(copy.buffer).body!, size: copy.byteLength, httpMetadata: { contentType: "application/octet-stream" } }; }, delete: async key => { artifacts.delete(key); } }, AI: { run: async () => ({ response: JSON.stringify({ reply: "I found the dashboard memory.", proposals: [{ type: "create_memory", summary: "Save a concise project fact", payload: { content: "Copilot-created project fact", kind: "fact", metadata: { category: "workflow" } } }] }) }) } };
   for (const id of ["alpha", "beta"]) {
     expect((await request("/v1/projects", "POST", { id, name: id }, admin)).status).toBe(201);

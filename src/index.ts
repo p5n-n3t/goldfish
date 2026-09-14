@@ -7,6 +7,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { z } from "zod";
 import { executeGraphQL } from "./graphql";
 import { handleAdminApi, renderAdminLoginShell, runScheduledCuration } from "./admin";
+import { classifyRequest, recordRequestEvent, type RequestMemoryLinkType, type RequestProtocol } from "./request-telemetry";
 
 interface DashboardLoginKV {
   get(key: string): Promise<string | null>;
@@ -23,6 +24,7 @@ export interface Env {
   AI?: import("./admin").CopilotAI;
   /** Shared Cloudflare KV; Goldfish uses a namespaced key for best-effort login throttling. */
   OAUTH_KV?: DashboardLoginKV;
+  ASSETS?: { fetch(request: Request): Promise<Response> };
 }
 const baseSecurityHeaders = {
   "cache-control": "no-store",
@@ -138,8 +140,35 @@ async function readJson(request: Request): Promise<unknown> {
   if (text.length > 512_000) throw new HttpError(413, "BODY_TOO_LARGE");
   try { return JSON.parse(text); } catch { throw new HttpError(400, "INVALID_JSON"); }
 }
+
+async function persistRequestTelemetry(request: Request, response: Response, env: Env, startedAt: number): Promise<void> {
+  if (!env.DB) return;
+  const url = new URL(request.url);
+  if (url.pathname === "/health" || url.pathname.includes("/requests")) return;
+  const pathProject = url.pathname.match(/\/projects\/([^/]+)/)?.[1];
+  let payload: Record<string, unknown> = {};
+  if ((response.headers.get("content-type") || "").includes("application/json")) {
+    try { const parsed = await response.clone().json(); if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed as Record<string, unknown>; } catch { /* response detail is optional */ }
+  }
+  const projectId = typeof payload.projectId === "string" ? payload.projectId : pathProject ? decodeURIComponent(pathProject) : null;
+  const protocol: RequestProtocol = url.pathname === "/mcp" ? "mcp" : url.pathname === "/graphql" ? "graphql" : url.pathname.startsWith("/admin/") ? "dashboard" : "api";
+  const operation = classifyRequest({ method: request.method, path: url.pathname, protocol });
+  const memoryLinks: Array<{ memoryId: string; type: RequestMemoryLinkType; ordinal?: number }> = [];
+  const memory = payload.memory && typeof payload.memory === "object" ? payload.memory as Record<string, unknown> : null;
+  if (typeof memory?.id === "string") memoryLinks.push({ memoryId: memory.id, type: operation === "add" ? "created" : operation === "update" ? "updated" : operation === "delete" ? "deleted" : "fetched" });
+  if (Array.isArray(payload.results)) payload.results.slice(0, 100).forEach((entry, ordinal) => { if (entry && typeof entry === "object" && typeof (entry as Record<string, unknown>).id === "string") memoryLinks.push({ memoryId: String((entry as Record<string, unknown>).id), type: "matched", ordinal }); });
+  await recordRequestEvent(env.DB, { projectId, method: request.method, path: url.pathname, protocol, operation, statusCode: response.status,
+    latencyMs: Math.max(0, performance.now() - startedAt), appId: protocol === "dashboard" ? "goldfish_dashboard" : protocol, authMode: protocol === "dashboard" ? "dashboard_session" : "api_key",
+    outputCount: Array.isArray(payload.results) ? payload.results.length : memory ? 1 : 0, errorCode: typeof payload.error === "string" ? payload.error : null, memoryLinks });
+}
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    const startedAt = performance.now();
+    const finish = (response: Response) => {
+      const task = persistRequestTelemetry(request, response, env, startedAt).catch(() => undefined);
+      if (ctx) ctx.waitUntil(task);
+      return response;
+    };
     try {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/health") return json({ ok: true, service: "goldfish-worker" });
@@ -159,7 +188,7 @@ export default {
       }
       if (request.method === "POST" && url.pathname === "/admin/logout") { requireSameOrigin(request); const response = json({ authenticated: false }); response.headers.set("set-cookie", clearedDashboardCookie); return response; }
       if (request.method === "GET" && url.pathname === "/admin/session") { await requireDashboard(request, env); return json({ authenticated: true, role: "dashboard-admin" }); }
-      if (url.pathname.startsWith("/admin/api/")) { await requireDashboard(request, env); if (request.method !== "GET" && request.method !== "HEAD") requireSameOrigin(request); return await handleAdminApi(request, env); }
+      if (url.pathname.startsWith("/admin/api/")) { await requireDashboard(request, env); if (request.method !== "GET" && request.method !== "HEAD") requireSameOrigin(request); return finish(await handleAdminApi(request, env)); }
       if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/") {
         const nonce = dashboardNonce();
         try { await requireDashboard(request, env); }
@@ -167,15 +196,22 @@ export default {
           if (error instanceof HttpError && error.status === 401) return dashboardPage(renderAdminLoginShell(nonce), nonce, request.method === "HEAD");
           throw error;
         }
+        if (env.ASSETS) {
+          const assetUrl = new URL("/index.html", url);
+          const asset = await env.ASSETS.fetch(new Request(assetUrl, request));
+          const headers = new Headers(asset.headers);
+          for (const [name, value] of Object.entries(dashboardHeaders(nonce))) headers.set(name, value);
+          return new Response(request.method === "HEAD" ? null : asset.body, { status: asset.status, headers });
+        }
         return dashboardPage(renderDashboard(undefined, nonce), nonce, request.method === "HEAD");
       }
-      if (url.pathname === "/mcp") return await handleMcp(request, env);
+      if (url.pathname === "/mcp") return finish(await handleMcp(request, env));
       if (url.pathname === "/graphql") {
         if (request.method !== "POST") return json({ errors: [{ message: "GraphQL accepts POST only", extensions: { code: "METHOD_NOT_ALLOWED" } }] }, 405);
         const principal = await authenticate(request, env);
         await touchKey(env.DB!, principal);
         const result = await executeGraphQL(env.DB!, principal, await readJson(request) as { query?: unknown; variables?: unknown });
-        return json(result, result.errors ? 400 : 200);
+        return finish(json(result, result.errors ? 400 : 200));
       }
       if (url.pathname === "/v1/workspace-keys" && request.method === "POST") {
         await requireAdmin(request, env);
@@ -211,7 +247,7 @@ export default {
         const principal = await authenticate(request, env);
         await touchKey(env.DB!, principal);
         const repository = new LexicalD1MemoryRepository(env.DB!);
-        return json({ projects: principal.accessScope === "workspace" ? await repository.listAllProjects() : await repository.listProjects(principal.projectId) });
+        return finish(json({ projects: principal.accessScope === "workspace" ? await repository.listAllProjects() : await repository.listProjects(principal.projectId) }));
       }
       const memoryMatch = url.pathname.match(/^\/v1\/projects\/([^/]+)\/(memory|checkpoints)(?:\/([^/]+))?$/);
       if (memoryMatch) {
@@ -224,20 +260,20 @@ export default {
         if (request.method === "GET" && memoryMatch[2] === "memory" && action && action !== "search") {
           const memory = await repository.get(projectId, validId(action));
           if (!memory) throw new HttpError(404, "MEMORY_NOT_FOUND");
-          return json({ projectId, memory });
+          return finish(json({ projectId, memory }));
         }
         if (request.method === "POST") {
           const body = await readJson(request);
           if (action === "search" && memoryMatch[2] === "memory") {
             let query;
             try { query = validateSearchQuery(body); } catch (error) { throw new HttpError(400, "INVALID_SEARCH", (error as Error).message); }
-            return json({ projectId, retrieval: "lexical", results: await repository.search(projectId, query) });
+            return finish(json({ projectId, retrieval: "lexical", results: await repository.search(projectId, query) }));
           }
           if (!action) {
             try { validateMemoryInput(memoryMatch[2] === "checkpoints" && body && typeof body === "object" ? { ...body, kind: "task" } : body); }
             catch (error) { throw new HttpError(400, "INVALID_MEMORY", (error as Error).message); }
             if (principal.accessScope === "workspace") await repository.ensureProject(projectId);
-            return json({ projectId, memory: await saveMemory(repository, projectId, body, memoryMatch[2] === "checkpoints") }, 201);
+            return finish(json({ projectId, memory: await saveMemory(repository, projectId, body, memoryMatch[2] === "checkpoints") }, 201));
           }
         }
         return json({ error: "METHOD_NOT_ALLOWED" }, 405);
@@ -247,10 +283,10 @@ export default {
       if (error instanceof HttpError) {
         const response = json({ error: error.code, message: error.message }, error.status);
         if (error.status === 401) response.headers.set("www-authenticate", 'Bearer realm="goldfish"');
-        return response;
+        return finish(response);
       }
-      if (error instanceof URIError) return json({ error: "INVALID_PATH" }, 400);
-      return json({ error: "INTERNAL_ERROR", message: "The operation could not be completed" }, 500);
+      if (error instanceof URIError) return finish(json({ error: "INVALID_PATH" }, 400));
+      return finish(json({ error: "INTERNAL_ERROR", message: "The operation could not be completed" }, 500));
     }
   },
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {

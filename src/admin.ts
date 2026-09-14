@@ -3,6 +3,7 @@ import { HttpError, issueKey, revokeKey, type AuthEnv } from "./auth";
 import { LexicalD1MemoryRepository, type D1DatabaseLike, type D1PreparedStatement } from "./repositories";
 import { getMemoryAnalytics } from "./admin-analytics";
 import { queryMemoryGraph, rebuildCooccurrenceGraph } from "./admin-graph";
+import { getRequestAnalytics, getRequestEventDetail, listRequestEvents, type RequestOperation, type RequestOutcome, type RequestProtocol } from "./request-telemetry";
 
 export interface CopilotAI { run(model: string, input: unknown): Promise<unknown> }
 export interface R2ArtifactObject {
@@ -229,16 +230,104 @@ async function analytics(db: D1DatabaseLike, projectId: string, url: URL) {
 }
 
 async function projectSummary(db: D1DatabaseLike) {
-  const result = await db.prepare(`SELECT p.id, p.name, p.created_at, p.updated_at, COUNT(DISTINCT r.id) AS memory_count,
+  const result = await db.prepare(`SELECT p.id, p.name, pp.display_name, pp.canonical_folder_slug, p.created_at, p.updated_at, COUNT(DISTINCT r.id) AS memory_count,
     COUNT(DISTINCT a.id) AS agent_count, COUNT(DISTINCT s.id) AS session_count, MAX(r.updated_at) AS latest_memory_at
-    FROM projects p LEFT JOIN memory_records r ON r.project_id = p.id LEFT JOIN agents a ON a.project_id = p.id LEFT JOIN sessions s ON s.project_id = p.id
+    FROM projects p LEFT JOIN project_profiles pp ON pp.project_id = p.id LEFT JOIN memory_records r ON r.project_id = p.id LEFT JOIN agents a ON a.project_id = p.id LEFT JOIN sessions s ON s.project_id = p.id
     GROUP BY p.id ORDER BY latest_memory_at DESC, p.name ASC`).all<Record<string, unknown>>();
   return result.results;
 }
 
 async function keys(db: D1DatabaseLike, projectId: string) {
-  await projectExists(db, projectId); const result = await db.prepare("SELECT id, project_id, key_prefix, label, last_used_at, created_at, revoked_at FROM api_keys WHERE project_id = ? ORDER BY created_at DESC").bind(projectId).all<Record<string, unknown>>();
-  return result.results.map(row => ({ id: row.id, projectId: row.project_id, keyPrefix: row.key_prefix, label: row.label, lastUsedAt: row.last_used_at, createdAt: row.created_at, revokedAt: row.revoked_at }));
+  await projectExists(db, projectId); const result = await db.prepare(`SELECT k.id, k.project_id, k.key_prefix, k.label, k.access_scope, k.permissions_json, k.expires_at,
+    k.rate_limit_max, k.rate_limit_window_seconds, k.last_used_at, k.created_at, k.revoked_at, COUNT(re.id) AS request_count
+    FROM api_keys k LEFT JOIN request_events re ON re.api_key_id = k.id WHERE k.project_id = ? GROUP BY k.id ORDER BY k.created_at DESC`).bind(projectId).all<Record<string, unknown>>();
+  return result.results.map(row => ({ id: row.id, projectId: row.project_id, keyPrefix: row.key_prefix, label: row.label, accessScope: row.access_scope, permissions: JSON.parse(String(row.permissions_json ?? "[]")), expiresAt: row.expires_at, rateLimitMax: row.rate_limit_max, rateLimitWindowSeconds: row.rate_limit_window_seconds, lastUsedAt: row.last_used_at, createdAt: row.created_at, revokedAt: row.revoked_at, requestCount: Number(row.request_count ?? 0) }));
+}
+
+const jsonArray = (value: unknown): unknown[] => { try { const parsed = JSON.parse(String(value ?? "[]")); return Array.isArray(parsed) ? parsed : []; } catch { return []; } };
+
+async function projectProfile(db: D1DatabaseLike, projectId: string, input?: Record<string, unknown>) {
+  await projectExists(db, projectId);
+  if (input) {
+    const displayName = typeof input.displayName === "string" ? input.displayName.trim().slice(0, 200) : null;
+    const canonicalFolder = typeof input.canonicalFolder === "string" ? input.canonicalFolder.trim().slice(0, 500) : projectId;
+    const purpose = typeof input.purpose === "string" ? input.purpose.trim().slice(0, 4_000) : null;
+    const aliases = Array.isArray(input.aliases) ? input.aliases.filter(x => typeof x === "string").slice(0, 100) : [];
+    const relatedSources = Array.isArray(input.relatedSources) ? input.relatedSources.filter(x => typeof x === "string").slice(0, 100) : [];
+    await db.prepare(`INSERT INTO project_profiles (project_id, display_name, canonical_folder_slug, repository_name, purpose, aliases_json, related_sources_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET display_name=excluded.display_name, canonical_folder_slug=excluded.canonical_folder_slug,
+      repository_name=excluded.repository_name, purpose=excluded.purpose, aliases_json=excluded.aliases_json, related_sources_json=excluded.related_sources_json, updated_at=datetime('now')`)
+      .bind(projectId, displayName, canonicalFolder, projectId, purpose, JSON.stringify(aliases), JSON.stringify(relatedSources)).run();
+    await audit(db, projectId, "project.profile_update", "project_profile", projectId, { aliases: aliases.length, relatedSources: relatedSources.length });
+  }
+  const result = await db.prepare("SELECT * FROM project_profiles WHERE project_id = ?").bind(projectId).all<Record<string, unknown>>();
+  const row = result.results[0];
+  return { profile: row ? { projectId, displayName: row.display_name, canonicalFolder: row.canonical_folder_slug, repositoryName: row.repository_name, purpose: row.purpose, aliases: jsonArray(row.aliases_json), relatedSources: jsonArray(row.related_sources_json), updatedAt: row.updated_at } : { projectId, displayName: null, canonicalFolder: projectId, repositoryName: projectId, purpose: null, aliases: [], relatedSources: [] } };
+}
+
+async function workflowDocuments(db: D1DatabaseLike, projectId: string, input?: Record<string, unknown>) {
+  await projectExists(db, projectId);
+  if (input) {
+    const kind = typeof input.kind === "string" && ["agents", "claude", "gemini", "commandork", "other"].includes(input.kind) ? input.kind : "other";
+    const content = typeof input.content === "string" ? input.content.slice(0, 200_000) : "";
+    if (!content) throw new HttpError(400, "WORKFLOW_CONTENT_REQUIRED");
+    await db.prepare(`INSERT INTO workflow_documents (id, project_id, scope, document_kind, canonical_path, content, content_hash, sync_status)
+      VALUES (?, ?, 'project', ?, ?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), projectId, kind, typeof input.path === "string" ? input.path.slice(0, 1_000) : null, content, await contentHash(content), input.syncStatus === "synced" ? "synced" : "pending").run();
+  }
+  const rows = await db.prepare(`SELECT id, document_kind, canonical_path, content_hash, version, sync_status, sync_error, updated_at, synced_at
+    FROM workflow_documents WHERE project_id = ? OR (scope = 'global' AND project_id IS NULL) ORDER BY document_kind, version DESC`).bind(projectId).all<Record<string, unknown>>();
+  return { documents: rows.results.map(row => ({ id: row.id, client: row.document_kind, pathHint: row.canonical_path, contentHash: row.content_hash, version: row.version, syncStatus: row.sync_status, syncError: row.sync_error, updatedAt: row.updated_at, syncedAt: row.synced_at })) };
+}
+
+async function requestDashboard(db: D1DatabaseLike, projectId: string, url: URL) {
+  const query = { operation: (url.searchParams.get("operation") || undefined) as RequestOperation | undefined, protocol: (url.searchParams.get("protocol") || undefined) as RequestProtocol | undefined,
+    outcome: (url.searchParams.get("outcome") || undefined) as RequestOutcome | undefined, agentId: url.searchParams.get("agentId") || undefined, appId: url.searchParams.get("appId") || undefined,
+    from: url.searchParams.get("from") || undefined, to: url.searchParams.get("to") || undefined, limit: asNumber(url.searchParams.get("limit"), 100, 1, 200), offset: asNumber(url.searchParams.get("offset"), 0, 0, 1_000_000) };
+  const todayFrom = new Date(); todayFrom.setUTCHours(0, 0, 0, 0);
+  const [listed, requestAnalytics, todayAnalytics] = await Promise.all([listRequestEvents(db, projectId, query), getRequestAnalytics(db, projectId, query), getRequestAnalytics(db, projectId, { from: todayFrom.toISOString() })]);
+  const operations = Object.fromEntries(requestAnalytics.operations.map(x => [x.label, x.count])); const summary = requestAnalytics.summary;
+  return { requests: listed.items.map(item => ({ ...item, memoryIds: [] })), total: listed.count, hasMore: listed.hasMore, timeline: requestAnalytics.timeline, operations: requestAnalytics.operations, protocols: requestAnalytics.protocols,
+    summary: { total: summary.requests, today: todayAnalytics.summary.requests, successRate: summary.requests ? Math.round(summary.successes / summary.requests * 1000) / 10 : 0,
+      errors: summary.errors, searches: Number(operations.search || 0), writes: Number(operations.add || 0) + Number(operations.update || 0), p50Ms: summary.p50LatencyMs, p95Ms: summary.p95LatencyMs, emptySearches: 0 } };
+}
+
+async function projectSummaries(db: D1DatabaseLike, env: AdminEnv, projectId: string, input?: Record<string, unknown>) {
+  await projectExists(db, projectId);
+  if (!input) {
+    const rows = await db.prepare("SELECT id, summary_type, status, title, content, source_count, source_memory_ids_json, generated_by, model_id, period_start, period_end, created_at, activated_at FROM project_summaries WHERE project_id = ? ORDER BY created_at DESC LIMIT 100").bind(projectId).all<Record<string, unknown>>();
+    return { summaries: rows.results.map(row => ({ id: row.id, type: row.summary_type, status: row.status, title: row.title, content: row.content, sourceCount: Number(row.source_count), sourceMemoryIds: jsonArray(row.source_memory_ids_json), generatedBy: row.generated_by, modelId: row.model_id, periodStart: row.period_start, periodEnd: row.period_end, createdAt: row.created_at, activatedAt: row.activated_at })) };
+  }
+  const inputIds = Array.isArray(input.memoryIds) ? input.memoryIds.filter(x => typeof x === "string").slice(0, 200) : [];
+  const from = typeof input.from === "string" ? input.from : null; const to = typeof input.to === "string" ? input.to : null;
+  const where = ["r.project_id = ?", "r.lifecycle_status != 'deleted'"]; const values: unknown[] = [projectId];
+  if (inputIds.length) { where.push(`r.id IN (${inputIds.map(() => "?").join(",")})`); values.push(...inputIds); }
+  if (from) { where.push("r.updated_at >= ?"); values.push(from); } if (to) { where.push("r.updated_at <= ?"); values.push(to); }
+  const rows = await db.prepare(`${memorySelect} WHERE ${where.join(" AND ")} ORDER BY r.updated_at DESC LIMIT 200`).bind(...values).all<MemoryRow>();
+  if (!rows.results.length) throw new HttpError(400, "NO_MEMORIES_TO_SUMMARIZE");
+  const sources = rows.results.map(row => shapeMemory(row, true));
+  const sourceText = sources.map((source, index) => `${index + 1}. [${source.id}] ${String(source.contentPreview).slice(0, 1_200)}`).join("\n").slice(0, 80_000);
+  let content = `Project brief draft for ${projectId}\n\nSource memories: ${sources.length}.\n\n${sourceText.slice(0, 12_000)}`; let modelId: string | null = null;
+  if (env.AI) {
+    const result = await env.AI.run("@cf/meta/llama-3.1-8b-instruct-fast", { messages: [{ role: "system", content: "Create a concise, factual project brief. Separate durable architecture/preferences, current state, decisions, blockers, and stale or contradictory material. Do not invent facts. Mention source memory IDs in brackets." }, { role: "user", content: sourceText }] });
+    const parsed = copilotResult(result); if (parsed.reply.trim()) { content = parsed.reply.slice(0, 40_000); modelId = "@cf/meta/llama-3.1-8b-instruct-fast"; }
+  }
+  const id = crypto.randomUUID();
+  await db.prepare("INSERT INTO project_summaries (id, project_id, summary_type, status, title, content, source_count, source_memory_ids_json, generated_by, model_id, period_start, period_end) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, 'goldfish-dashboard', ?, ?, ?)")
+    .bind(id, projectId, inputIds.length ? "selection" : "project_brief", typeof input.title === "string" ? input.title.slice(0, 240) : "Project brief", content, sources.length, JSON.stringify(sources.map(source => source.id)), modelId, from, to).run();
+  await audit(db, projectId, "summary.generate", "project_summary", id, { sourceCount: sources.length });
+  return { summary: { id, status: "draft", content, sourceCount: sources.length, sourceMemoryIds: sources.map(source => source.id), modelId } };
+}
+
+async function activateSummary(db: D1DatabaseLike, projectId: string, summaryId: string) {
+  const target = await db.prepare("SELECT id FROM project_summaries WHERE id = ? AND project_id = ?").bind(summaryId, projectId).all<{ id: string }>();
+  if (!target.results.length) throw new HttpError(404, "SUMMARY_NOT_FOUND");
+  await db.batch([
+    db.prepare("UPDATE project_summaries SET status = 'superseded' WHERE project_id = ? AND status = 'active'").bind(projectId),
+    db.prepare("UPDATE project_summaries SET status = 'active', activated_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND project_id = ?").bind(summaryId, projectId)
+  ]);
+  await audit(db, projectId, "summary.activate", "project_summary", summaryId);
+  return { id: summaryId, status: "active" };
 }
 
 async function auditList(db: D1DatabaseLike, url: URL) {
@@ -586,6 +675,14 @@ export async function handleAdminApi(request: Request, env: AdminEnv): Promise<R
   if (path === "/admin/api/audit" && request.method === "GET") return json({ audit: await auditList(db, url) });
   if (!projectMatch) return json({ error: "NOT_FOUND" }, 404);
   const projectId = validId(decodeURIComponent(projectMatch[1]), "projectId"); const rest = projectMatch[2] ?? "";
+  if (rest === "profile") { if (request.method === "GET") return json(await projectProfile(db, projectId)); if (request.method === "PATCH") return json(await projectProfile(db, projectId, await body(request))); }
+  if (rest === "workflow-documents") { if (request.method === "GET") return json(await workflowDocuments(db, projectId)); if (request.method === "POST") return json(await workflowDocuments(db, projectId, await body(request)), 201); }
+  if (rest === "summaries") { if (request.method === "GET") return json(await projectSummaries(db, env, projectId)); if (request.method === "POST") return json(await projectSummaries(db, env, projectId, await body(request)), 201); }
+  const summaryActivateMatch = rest.match(/^summaries\/([^/]+)\/activate$/);
+  if (summaryActivateMatch && request.method === "POST") return json({ summary: await activateSummary(db, projectId, validId(decodeURIComponent(summaryActivateMatch[1]), "summaryId")) });
+  if (rest === "requests" && request.method === "GET") return json(await requestDashboard(db, projectId, url));
+  const requestMatch = rest.match(/^requests\/([^/]+)$/);
+  if (requestMatch && request.method === "GET") return json(await getRequestEventDetail(db, projectId, validId(decodeURIComponent(requestMatch[1]), "requestId")));
   if (rest === "analytics" && request.method === "GET") return json(await analytics(db, projectId, url));
   if (rest === "copilot" && request.method === "POST") return json({ projectId, ...(await copilot(db, env, projectId, await body(request)) ) });
   const proposalMatch = rest.match(/^copilot\/([^/]+)\/proposals\/([^/]+)\/apply$/);

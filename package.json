@@ -5,21 +5,27 @@
   "description": "A Cloudflare-native, project-first memory layer for AI agents.",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "build:dashboard": "vite build --config vite.dashboard.config.js",
+    "dev:dashboard": "vite dev --config vite.dashboard.config.js",
+    "dev": "npm run build:dashboard && wrangler dev",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run build:dashboard && npm run typecheck && npm test"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260910.1",
+    "@preact/preset-vite": "^2.10.6",
     "miniflare": "^5.20260910.0-alpha",
     "typescript": "^5.9.3",
+    "vite": "^8.3.0",
     "vitest": "^3.2.4",
     "wrangler": "^4.44.0"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^0.10.3",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "echarts": "^6.1.0",
+    "preact": "^10.29.8",
     "zod": "^4.6.2"
   }
 }

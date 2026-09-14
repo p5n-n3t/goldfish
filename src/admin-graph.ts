@@ -95,9 +95,17 @@ export async function queryMemoryGraph(db: D1DatabaseLike, projectId: string, in
     GROUP BY e.id ORDER BY memory_count DESC, e.name ASC LIMIT ?`).bind(...values, limit).all<{ id: string; name: string; canonical_name: string; entity_type: string; description: string | null; metadata_json: string; memory_count: number; memory_ids: string }>();
   const nodes = nodesResult.results.map(row => ({ id: row.id, name: row.name, canonicalName: row.canonical_name, entityType: row.entity_type, description: row.description, metadata: jsonObject(row.metadata_json), memoryCount: Number(row.memory_count), memoryIds: JSON.parse(row.memory_ids || "[]").filter((id: unknown): id is string => typeof id === "string") })) as GraphNode[];
   if (!nodes.length) return { projectId, extraction: "not-run", edgeDerivation: "exact co-occurrence from persisted memory_entities", nodes, edges: [] as GraphEdge[] };
-  const ids = nodes.map(node => node.id); const markers = ids.map(() => "?").join(",");
-  const edges = await db.prepare(`SELECT id, source_entity_id, target_entity_id, relationship_type, weight, confidence
-    FROM entity_edges WHERE project_id = ? AND source_entity_id IN (${markers}) AND target_entity_id IN (${markers})
-    ORDER BY weight DESC, id ASC LIMIT ?`).bind(projectId, ...ids, ...ids, limit * 4).all<{ id: string; source_entity_id: string; target_entity_id: string; relationship_type: string; weight: number; confidence: number | null }>();
+  // Re-select the bounded node set in SQL and join it twice. Binding every ID
+  // into two IN clauses exceeded D1's variable limit for ordinary graph sizes.
+  const edges = await db.prepare(`WITH selected AS (
+      SELECT e.id FROM entities e
+      WHERE ${where.join(" AND ")}
+      ORDER BY (SELECT COUNT(*) FROM memory_entities ranked WHERE ranked.entity_id = e.id AND ranked.project_id = e.project_id) DESC, e.name ASC
+      LIMIT ?
+    )
+    SELECT edge.id, edge.source_entity_id, edge.target_entity_id, edge.relationship_type, edge.weight, edge.confidence
+    FROM entity_edges edge JOIN selected source ON source.id = edge.source_entity_id JOIN selected target ON target.id = edge.target_entity_id
+    WHERE edge.project_id = ? ORDER BY edge.weight DESC, edge.id ASC LIMIT ?`)
+    .bind(...values, limit, projectId, limit * 4).all<{ id: string; source_entity_id: string; target_entity_id: string; relationship_type: string; weight: number; confidence: number | null }>();
   return { projectId, extraction: "not-run", edgeDerivation: "exact co-occurrence from persisted memory_entities", nodes, edges: edges.results.map(row => ({ id: row.id, sourceEntityId: row.source_entity_id, targetEntityId: row.target_entity_id, relationshipType: row.relationship_type, weight: Number(row.weight), confidence: row.confidence })) as GraphEdge[] };
 }
