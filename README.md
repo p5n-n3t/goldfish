@@ -1,6 +1,16 @@
 # Goldfish
 
-![Goldfish logo](plugins/goldfish/assets/goldfish-logo.png)
+<div align="center">
+
+![Goldfish logo](plugins/goldfish/assets/goldfish-logo.png?size=200)
+
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black)](https://www.javascript.com/)
+[![Cloudflare](https://img.shields.io/badge/Cloudflare-F38020?style=flat-square&logo=cloudflare&logoColor=white)](https://www.cloudflare.com/)
+[![Workers AI](https://img.shields.io/badge/Workers%20AI-FF6B6B?style=flat-square&logo=openai&logoColor=white)](https://developers.cloudflare.com/workers-ai/)
+[![D1](https://img.shields.io/badge/D1%20Database-4A90E2?style=flat-square&logo=database&logoColor=white)](https://developers.cloudflare.com/d1/)
+
+</div>
 
 Goldfish is a private, Cloudflare-native memory ledger for coding agents. It keeps
 project memory, checkpoints, provenance, lifecycle decisions, and administrator
