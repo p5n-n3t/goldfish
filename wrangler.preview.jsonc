@@ -1,0 +1,36 @@
+// Local-only Wrangler config for isolated previews (`wrangler dev -c wrangler.preview.jsonc`).
+// Mirrors wrangler.jsonc without the account id and without the Workers AI and
+// Vectorize bindings, which have no local emulation and would require Cloudflare
+// credentials. D1, KV, R2 and static assets run locally under Miniflare.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "goldfish-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-10",
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "goldfish-preview-oauth-kv"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "goldfish",
+      "database_id": "goldfish-preview-d1",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "goldfish-artifacts"
+    }
+  ],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": ["/", "/admin/*", "/mcp", "/graphql", "/v1/*"]
+  }
+}
